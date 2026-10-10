@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ "Request access" if mode == "signup" else "Log in" }}{% endblock %}
+{% block body %}
+<section class="card narrow">
+  <p class="kicker">{{ "A seat is not automatic" if mode == "signup" else "Approved accounts only" }}</p>
+  <h1>{{ "Request a seat" if mode == "signup" else "Log in" }}</h1>
+  {% if mode == "signup" %}
+  <p class="muted">The owner reviews every request. Until then the desk stays closed.</p>
+  <form id="form" class="stack">
+    <label>Name <input name="name" required maxlength="80" autocomplete="name"></label>
+    <label>Email <input name="email" type="email" required maxlength="120" autocomplete="email"></label>
+    <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+    <div class="split">
+      <label>Class
+        <select name="class_year">
+          <option>Class 11</option>
+          <option selected>Class 12</option>
+          <option>Dropper</option>
+        </select>
+      </label>
+      <label>Target
+        <select name="target">
+          <option>JEE Main</option>
+          <option>JEE Advanced</option>
+          <option selected>Main and Advanced</option>
+        </select>
+      </label>
+    </div>
+    <label>Why should this account be approved?
+      <textarea name="note" maxlength="400" placeholder="Student name, city, who referred you."></textarea>
+    </label>
+    <button class="btn" type="submit">Send request</button>
+    <p class="muted">Already requested? <a href="/login">Log in</a></p>
+  </form>
+  {% else %}
+  <form id="form" class="stack">
+    <label>Email <input name="email" type="email" required autocomplete="email"></label>
+    <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+    <button class="btn" type="submit">Log in</button>
+    <p class="muted">No account yet? <a href="/signup">Request access</a></p>
+  </form>
+  {% endif %}
+  <p id="err" class="error" hidden></p>
+</section>
+{% endblock %}
+{% block script %}
+<script>
+  const mode = {{ mode | tojson }};
+  const form = document.getElementById("form");
+  const err = document.getElementById("err");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const res = await fetch(mode === "signup" ? "/api/signup" : "/api/login", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(data)
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      err.hidden = false;
+      err.textContent = body.error || "Could not continue.";
+      return;
+    }
+    location.href = body.admin ? "/admin" : (body.status === "approved" ? "/desk" : "/waiting");
+  });
+</script>
+{% endblock %}

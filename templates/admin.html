@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Approvals{% endblock %}
+{% block body %}
+<section class="card wide">
+  <p class="kicker">Owner only</p>
+  <h1>Who may use the desk</h1>
+  <p class="muted">API key {{ "is set" if key_set else "is missing — chat will fail until XAI_API_KEY is set" }}. Model {{ model }}. Default cap {{ cap }} messages per student per day.</p>
+  <div id="rows" class="people"></div>
+  <p id="err" class="error" hidden></p>
+</section>
+{% endblock %}
+{% block script %}
+<script>
+  const CSRF = {{ csrf | tojson }};
+  const rows = document.getElementById("rows");
+  const err = document.getElementById("err");
+  function show(message) {
+    err.hidden = !message;
+    err.textContent = message || "";
+  }
+  async function act(id, action, extra) {
+    show("");
+    const res = await fetch("/api/admin/users/" + id, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-CSRF": CSRF},
+      body: JSON.stringify({action, ...extra})
+    });
+    const body = await res.json();
+    if (!res.ok) { show(body.error || "Failed"); return; }
+    if (body.temp_password) alert("Temporary password: " + body.temp_password);
+    load();
+  }
+  function text(value) {
+    return String(value ?? "");
+  }
+  async function load() {
+    const res = await fetch("/api/admin/users");
+    const data = await res.json();
+    rows.innerHTML = "";
+    for (const u of data.users || []) {
+      const card = document.createElement("article");
+      const head = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = text(u.name);
+      head.appendChild(name);
+      for (const [label, cls] of [[u.status, u.status], [u.role, ""]]) {
+        const pill = document.createElement("span");
+        pill.className = "pill " + cls;
+        pill.textContent = label;
+        head.appendChild(pill);
+      }
+      const email = document.createElement("p");
+      email.textContent = text(u.email);
+      const meta = document.createElement("p");
+      meta.className = "muted";
+      meta.textContent = `${u.class_year || "—"} · ${u.target || "—"} · today ${u.today}/${u.daily_cap}`;
+      const note = document.createElement("p");
+      note.textContent = text(u.note);
+      const actions = document.createElement("div");
+      actions.className = "row wrap";
+      card.append(head, email, meta, note, actions);
+      const add = (label, action, extra) => {
+        const b = document.createElement("button");
+        b.className = "btn small ghost";
+        b.type = "button";
+        b.textContent = label;
+        b.addEventListener("click", () => act(u.id, action, extra));
+        actions.appendChild(b);
+      };
+      if (u.status !== "approved") add("Approve", "approve");
+      if (u.status !== "rejected" && u.role !== "admin") add("Decline", "reject");
+      if (u.status === "approved" && u.role !== "admin") add("Revoke", "revoke");
+      if (u.role !== "admin") add("Reset password", "reset_password");
+      if (u.role !== "admin") add("Delete", "delete");
+      rows.appendChild(card);
+    }
+  }
+  load();
+</script>
+{% endblock %}

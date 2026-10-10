@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}Desk{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+{% endblock %}
+{% block body %}
+<section class="desk">
+  <aside>
+    <button class="btn block" id="newchat" type="button">New doubt</button>
+    <div id="list" class="convo-list"></div>
+  </aside>
+  <div class="thread">
+    <div class="controls">
+      <select id="subject">
+        <option>Physics</option>
+        <option>Chemistry</option>
+        <option>Mathematics</option>
+      </select>
+      <select id="exam">
+        <option>JEE Main</option>
+        <option selected>JEE Advanced</option>
+      </select>
+      <select id="mode">
+        <option value="solve">Worked solution</option>
+        <option value="hint">One hint</option>
+        <option value="practice">Practice question</option>
+        <option value="concept">Concept</option>
+        <option value="revision">Formula revision</option>
+      </select>
+      <select id="language">
+        <option>English</option>
+        <option>Hindi</option>
+      </select>
+    </div>
+    <div id="chips" class="chips"></div>
+    <div id="log" class="log"></div>
+    <form id="composer" class="composer">
+      <input id="image" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+      <button class="icon" type="button" id="attach" title="Attach question photo">Photo</button>
+      <textarea id="text" rows="2" placeholder="Paste the doubt, or attach a photo and say what is stuck."></textarea>
+      <button class="btn" type="submit" id="send">Send</button>
+    </form>
+    <p id="filelabel" class="muted filelabel"></p>
+    <p id="err" class="error" hidden></p>
+  </div>
+</section>
+{% endblock %}
+{% block script %}
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<script>
+  const CSRF = {{ csrf | tojson }};
+  const TOPICS = {
+    Physics: ["Mechanics", "Electrostatics", "Current electricity", "Magnetism", "EMI", "Optics", "Modern physics", "Thermodynamics", "Waves", "Rotation"],
+    Chemistry: ["Mole concept", "Equilibrium", "Electrochemistry", "GOC", "Hydrocarbons", "Carbonyls", "Coordination", "p-block", "d-block", "Chemical kinetics"],
+    Mathematics: ["Quadratic", "Complex numbers", "Matrices", "Limits", "Integration", "Differential equations", "Conic sections", "Vectors", "Probability", "Trigonometry"]
+  };
+  const list = document.getElementById("list");
+  const log = document.getElementById("log");
+  const err = document.getElementById("err");
+  const text = document.getElementById("text");
+  const image = document.getElementById("image");
+  const filelabel = document.getElementById("filelabel");
+  let current = null;
+
+  function renderMath(el) {
+    if (!window.renderMathInElement) return;
+    renderMathInElement(el, {
+      delimiters: [
+        {left: "$$", right: "$$", display: true},
+        {left: "$", right: "$", display: false}
+      ],
+      throwOnError: false
+    });
+  }
+  function htmlOf(src) {
+    const raw = marked.parse(src || "", {breaks: true});
+    return DOMPurify.sanitize(raw);
+  }
+  function bubble(role, content, imageUrl) {
+    const node = document.createElement("article");
+    node.className = "msg " + role;
+    if (imageUrl) {
+      const img = document.createElement("img");
+      img.src = imageUrl;
+      img.alt = "Question photo";
+      node.appendChild(img);
+    }
+    const body = document.createElement("div");
+    body.className = "prose";
+    body.innerHTML = htmlOf(content);
+    node.appendChild(body);
+    log.appendChild(node);
+    renderMath(body);
+    log.scrollTop = log.scrollHeight;
+    return body;
+  }
+  function showError(message) {
+    err.hidden = !message;
+    err.textContent = message || "";
+  }
+  async function loadList() {
+    const res = await fetch("/api/conversations");
+    const data = await res.json();
+    list.innerHTML = "";
+    for (const c of data.conversations || []) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = c.title;
+      if (c.id === current) b.className = "on";
+      b.addEventListener("click", () => openConvo(c.id));
+      list.appendChild(b);
+    }
+  }
+  async function openConvo(id) {
+    current = id;
+    const res = await fetch("/api/conversations/" + id);
+    const data = await res.json();
+    log.innerHTML = "";
+    if (data.conversation) {
+      document.getElementById("subject").value = data.conversation.subject || "Physics";
+      document.getElementById("exam").value = data.conversation.exam || "JEE Advanced";
+      document.getElementById("mode").value = data.conversation.mode || "solve";
+    }
+    for (const m of data.messages || []) bubble(m.role, m.content, m.image_path);
+    paintChips();
+    loadList();
+  }
+  function paintChips() {
+    const box = document.getElementById("chips");
+    box.innerHTML = "";
+    for (const topic of TOPICS[document.getElementById("subject").value] || []) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = topic;
+      b.addEventListener("click", () => {
+        text.value = topic + ": " + (document.getElementById("mode").value === "practice"
+          ? "give me one fresh question."
+          : "revise the core idea and one standard problem.");
+        text.focus();
+      });
+      box.appendChild(b);
+    }
+  }
+  document.getElementById("subject").addEventListener("change", paintChips);
+  document.getElementById("newchat").addEventListener("click", () => {
+    current = null;
+    log.innerHTML = "";
+    bubble("assistant", "New sheet. Set Main or Advanced, pick a mode, then send the doubt or a photo.");
+    loadList();
+  });
+  document.getElementById("attach").addEventListener("click", () => image.click());
+  image.addEventListener("change", () => {
+    filelabel.textContent = image.files[0] ? "Attached: " + image.files[0].name : "";
+  });
+  document.getElementById("composer").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    showError("");
+    const value = text.value.trim();
+    if (!value && !image.files[0]) return;
+    const localUrl = image.files[0] ? URL.createObjectURL(image.files[0]) : null;
+    bubble("user", value || "[Question photo]", localUrl);
+    const body = bubble("assistant", "Working…");
+    const form = new FormData();
+    form.set("text", value);
+    form.set("subject", document.getElementById("subject").value);
+    form.set("exam", document.getElementById("exam").value);
+    form.set("mode", document.getElementById("mode").value);
+    form.set("language", document.getElementById("language").value);
+    if (current) form.set("conversation_id", String(current));
+    if (image.files[0]) form.set("image", image.files[0]);
+    text.value = "";
+    image.value = "";
+    filelabel.textContent = "";
+    document.getElementById("send").disabled = true;
+    try {
+      const res = await fetch("/api/chat", {method: "POST", headers: {"X-CSRF": CSRF}, body: form});
+      if (!res.ok) {
+        const fail = await res.json();
+        body.innerHTML = htmlOf(fail.error || "Request failed.");
+        showError(fail.error || "Request failed.");
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let answer = "";
+      while (true) {
+        const step = await reader.read();
+        if (step.done) break;
+        buffer += decoder.decode(step.value, {stream: true});
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop();
+        for (const part of parts) {
+          const line = part.split("\n").find(l => l.startsWith("data:"));
+          if (!line) continue;
+          const payload = JSON.parse(line.slice(5).trim());
+          if (payload.conversation_id) current = payload.conversation_id;
+          if (payload.token) {
+            answer += payload.token;
+            body.innerHTML = htmlOf(answer);
+            log.scrollTop = log.scrollHeight;
+          }
+          if (payload.error) showError(payload.error);
+        }
+      }
+      body.innerHTML = htmlOf(answer || "No reply.");
+      renderMath(body);
+      loadList();
+    } catch (ex) {
+      showError("Network error. The reply may still have been saved. Refresh.");
+    } finally {
+      document.getElementById("send").disabled = false;
+    }
+  });
+  text.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      document.getElementById("composer").requestSubmit();
+    }
+  });
+  paintChips();
+  loadList();
+  bubble("assistant", "Approved desk. Choose the exam level and a mode. Practice mode will not reveal the answer until you ask.");
+</script>
+{% endblock %}

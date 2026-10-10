@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Private JEE tutor{% endblock %}
+{% block body %}
+<section class="hero">
+  <p class="kicker">JEE Main · JEE Advanced · approval only</p>
+  <h1>A desk for the doubt you cannot leave overnight.</h1>
+  <p class="lede">Siddhant is a private tutor for Physics, Chemistry, and Mathematics. It works a photo of a question, a stuck step, or a fresh drill. The site is on the public internet. The desk is not. Every account waits until the owner approves it.</p>
+  <div class="row">
+    {% if user and (user["status"] == "approved" or admin) %}
+      <a class="btn" href="/desk">Open the desk</a>
+    {% elif user %}
+      <a class="btn" href="/waiting">Check your request</a>
+    {% else %}
+      <a class="btn" href="/signup">Request access</a>
+      <a class="btn ghost" href="/login">I already have an account</a>
+    {% endif %}
+  </div>
+</section>
+<section class="grid">
+  <article>
+    <h2>Worked solution</h2>
+    <p>Given, concept, equations, substitution, units, and the trap that usually costs the mark.</p>
+  </article>
+  <article>
+    <h2>Photo of the question</h2>
+    <p>Upload a handwritten or printed problem. The tutor restates it, then solves at Main or Advanced level.</p>
+  </article>
+  <article>
+    <h2>Drill, don’t spoil</h2>
+    <p>Practice mode gives the question only. Ask for a hint when you are actually stuck.</p>
+  </article>
+  <article>
+    <h2>Your gate</h2>
+    <p>Sign-up does not grant a seat. You approve, reject, revoke, or reset a password from the owner desk.</p>
+  </article>
+</section>
+<section class="note">
+  <p>Not a coaching institute and not an official NTA or JEE answer key. Use it to learn the method, then close the tab and redo the problem on paper.</p>
+</section>
+{% endblock %}

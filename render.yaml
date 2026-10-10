@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: siddhant-jee
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    disk:
+      name: siddhant-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: XAI_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        value: Vaibhav
+      - key: ADMIN_NOTIFY_URL
+        sync: false
+      - key: DAILY_MESSAGE_CAP
+        value: "40"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: DATABASE_PATH
+        value: /app/data/siddhant.db

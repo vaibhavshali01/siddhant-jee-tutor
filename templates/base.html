@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Siddhant{% endblock %} · JEE desk</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">
+      <span class="mark" aria-hidden="true">Σ</span>
+      <span>Siddhant</span>
+    </a>
+    <nav>
+      {% if user %}
+        {% if admin %}<a href="/admin">Approvals</a>{% endif %}
+        {% if user["status"] == "approved" or admin %}<a href="/desk">Desk</a>{% else %}<a href="/waiting">Request</a>{% endif %}
+        <button class="textbtn" id="logout" type="button">Log out</button>
+      {% else %}
+        <a href="/login">Log in</a>
+        <a class="btn small" href="/signup">Request access</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>
+    {% block body %}{% endblock %}
+  </main>
+  <script>
+    const out = document.getElementById("logout");
+    if (out) out.addEventListener("click", async () => {
+      await fetch("/api/logout", {method: "POST"});
+      location.href = "/";
+    });
+  </script>
+  {% block script %}{% endblock %}
+</body>
+</html>

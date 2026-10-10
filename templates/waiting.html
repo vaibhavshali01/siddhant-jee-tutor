@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Waiting{% endblock %}
+{% block body %}
+<section class="card narrow">
+  <p class="kicker">{{ user["status"] }}</p>
+  <h1>{% if user["status"] == "rejected" %}This request was declined{% else %}Waiting for approval{% endif %}</h1>
+  <p>Hello {{ user["name"] }}. Signed in as {{ user["email"] }}.</p>
+  {% if user["status"] == "rejected" %}
+    <p class="muted">The owner declined this account. If that is a mistake, ask them to look again. A new signup with the same email will not work.</p>
+  {% else %}
+    <p class="muted">The desk opens only after the owner approves you. You can close this page. Log in again later with the same email.</p>
+    <p class="muted">{{ user["class_year"] }} · {{ user["target"] }}</p>
+  {% endif %}
+</section>
+{% endblock %}
