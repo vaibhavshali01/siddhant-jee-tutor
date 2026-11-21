@@ -296,6 +296,15 @@
   });
   syncSubject();
   loadList();
+  const params = new URLSearchParams(location.search);
+  const subjectQuery = params.get("subject");
+  if (subjectQuery && [...document.getElementById("subject").options].some((option) => option.value === subjectQuery)) {
+    document.getElementById("subject").value = subjectQuery;
+    syncSubject();
+  }
+  if (params.get("mode")) document.getElementById("mode").value = params.get("mode");
+  if (params.get("exam")) document.getElementById("exam").value = params.get("exam");
+  if (params.get("text")) text.value = params.get("text");
   bubble("assistant", "Approved desk. Choose the exam level and a mode. Practice mode will not reveal the answer until you ask.");
 </script>
 {% endblock %}

@@ -30,7 +30,7 @@
       <button class="textbtn theme-toggle" id="theme" type="button">Theme</button>
       {% if user %}
         {% if admin %}<a href="/admin">Approvals</a>{% endif %}
-        {% if user["status"] == "approved" or admin %}<a href="/desk">Desk</a>{% else %}<a href="/waiting">Request</a>{% endif %}
+        {% if user["status"] == "approved" or admin %}<a href="/dashboard">Today</a><a href="/desk">Desk</a>{% else %}<a href="/waiting">Request</a>{% endif %}
         <button class="textbtn" id="logout" type="button">Log out</button>
       {% else %}
         <a href="/login">Log in</a>
