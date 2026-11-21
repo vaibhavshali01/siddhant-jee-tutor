@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Desk{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
 {% endblock %}
 {% block body %}
 <section class="desk">
@@ -9,7 +9,7 @@
     <button class="btn block" id="newchat" type="button">New doubt</button>
     <div id="list" class="convo-list"></div>
   </aside>
-  <div class="thread">
+  <div class="thread" id="thread">
     <div class="controls">
       <select id="subject">
         <option>Physics</option>
@@ -46,10 +46,11 @@
 </section>
 {% endblock %}
 {% block script %}
-<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="/static/vendor/katex/katex.min.js"></script>
+<script src="/static/vendor/katex/contrib/mhchem.min.js"></script>
+<script src="/static/tutor.js"></script>
 <script>
   const CSRF = {{ csrf | tojson }};
   const TOPICS = {
@@ -65,23 +66,17 @@
   const filelabel = document.getElementById("filelabel");
   let current = null;
 
-  function renderMath(el) {
-    if (!window.renderMathInElement) return;
-    renderMathInElement(el, {
-      delimiters: [
-        {left: "$$", right: "$$", display: true},
-        {left: "$", right: "$", display: false}
-      ],
-      throwOnError: false
-    });
+  function metaNow() {
+    return {
+      subject: document.getElementById("subject").value,
+      exam: document.getElementById("exam").value,
+      mode: document.getElementById("mode").value,
+    };
   }
-  function htmlOf(src) {
-    const raw = marked.parse(src || "", {breaks: true});
-    return DOMPurify.sanitize(raw);
-  }
-  function bubble(role, content, imageUrl) {
+  function bubble(role, content, imageUrl, meta) {
     const node = document.createElement("article");
     node.className = "msg " + role;
+    node.dataset.source = content || "";
     if (imageUrl) {
       const img = document.createElement("img");
       img.src = imageUrl;
@@ -89,14 +84,56 @@
       node.appendChild(img);
     }
     const body = document.createElement("div");
-    body.className = "prose";
-    body.innerHTML = htmlOf(content);
+    body.className = "msg-body";
     node.appendChild(body);
+    const info = Object.assign({role}, meta || metaNow());
+    if (info.pending) Tutor.thinking(body);
+    else Tutor.fill(body, content, info);
     log.appendChild(node);
-    renderMath(body);
-    log.scrollTop = log.scrollHeight;
+    if (info.stick !== false) log.scrollTop = log.scrollHeight;
     return body;
   }
+  function copyText(value) {
+    const fallback = () => {
+      const area = document.createElement("textarea");
+      area.value = value;
+      area.setAttribute("readonly", "");
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(value).catch(() => fallback());
+    }
+    fallback();
+    return Promise.resolve();
+  }
+  log.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-act]");
+    if (!button) return;
+    const msg = button.closest(".msg");
+    if (!msg) return;
+    if (button.dataset.act === "copy") {
+      copyText(msg.dataset.source || "").then(() => {
+        const previous = button.textContent;
+        button.textContent = "Copied";
+        setTimeout(() => { button.textContent = previous; }, 1400);
+      });
+    }
+    if (button.dataset.act === "print") {
+      document.querySelectorAll(".msg.is-printing").forEach((node) => node.classList.remove("is-printing"));
+      msg.classList.add("is-printing");
+      document.body.classList.add("printing-one");
+      const done = () => {
+        msg.classList.remove("is-printing");
+        document.body.classList.remove("printing-one");
+        window.removeEventListener("afterprint", done);
+      };
+      window.addEventListener("afterprint", done);
+      window.print();
+    }
+  });
   function showError(message) {
     err.hidden = !message;
     err.textContent = message || "";
@@ -124,9 +161,21 @@
       document.getElementById("exam").value = data.conversation.exam || "JEE Advanced";
       document.getElementById("mode").value = data.conversation.mode || "solve";
     }
-    for (const m of data.messages || []) bubble(m.role, m.content, m.image_path);
-    paintChips();
+    for (const m of data.messages || []) {
+      bubble(m.role, m.content, m.image_path, {
+        subject: data.conversation.subject,
+        exam: data.conversation.exam,
+        mode: data.conversation.mode,
+        stick: false,
+      });
+    }
+    log.scrollTop = 0;
+    syncSubject();
     loadList();
+  }
+  function syncSubject() {
+    document.getElementById("thread").dataset.subject = document.getElementById("subject").value;
+    paintChips();
   }
   function paintChips() {
     const box = document.getElementById("chips");
@@ -144,7 +193,7 @@
       box.appendChild(b);
     }
   }
-  document.getElementById("subject").addEventListener("change", paintChips);
+  document.getElementById("subject").addEventListener("change", syncSubject);
   document.getElementById("newchat").addEventListener("click", () => {
     current = null;
     log.innerHTML = "";
@@ -161,8 +210,9 @@
     const value = text.value.trim();
     if (!value && !image.files[0]) return;
     const localUrl = image.files[0] ? URL.createObjectURL(image.files[0]) : null;
-    bubble("user", value || "[Question photo]", localUrl);
-    const body = bubble("assistant", "Working…");
+    const sent = metaNow();
+    bubble("user", value || "[Question photo]", localUrl, sent);
+    const body = bubble("assistant", "", null, Object.assign({pending: true}, sent));
     const form = new FormData();
     form.set("text", value);
     form.set("subject", document.getElementById("subject").value);
@@ -179,7 +229,11 @@
       const res = await fetch("/api/chat", {method: "POST", headers: {"X-CSRF": CSRF}, body: form});
       if (!res.ok) {
         const fail = await res.json();
-        body.innerHTML = htmlOf(fail.error || "Request failed.");
+        body.replaceChildren();
+        const note = document.createElement("div");
+        note.className = "prose error";
+        note.textContent = fail.error || "Request failed.";
+        body.appendChild(note);
         showError(fail.error || "Request failed.");
         return;
       }
@@ -187,6 +241,14 @@
       const decoder = new TextDecoder();
       let buffer = "";
       let answer = "";
+      let failed = false;
+      let paint = 0;
+      const draw = (streaming) => {
+        const msg = body.closest(".msg");
+        if (msg) msg.dataset.source = answer;
+        Tutor.fill(body, answer || "No reply.", Object.assign({streaming}, sent));
+        log.scrollTop = log.scrollHeight;
+      };
       while (true) {
         const step = await reader.read();
         if (step.done) break;
@@ -200,14 +262,25 @@
           if (payload.conversation_id) current = payload.conversation_id;
           if (payload.token) {
             answer += payload.token;
-            body.innerHTML = htmlOf(answer);
-            log.scrollTop = log.scrollHeight;
+            cancelAnimationFrame(paint);
+            paint = requestAnimationFrame(() => draw(true));
           }
-          if (payload.error) showError(payload.error);
+          if (payload.error) {
+            showError(payload.error);
+            failed = true;
+          }
         }
       }
-      body.innerHTML = htmlOf(answer || "No reply.");
-      renderMath(body);
+      cancelAnimationFrame(paint);
+      if (failed && !answer) {
+        body.replaceChildren();
+        const note = document.createElement("div");
+        note.className = "prose error";
+        note.textContent = err.textContent || "The tutor could not answer.";
+        body.appendChild(note);
+      } else {
+        draw(false);
+      }
       loadList();
     } catch (ex) {
       showError("Network error. The reply may still have been saved. Refresh.");
@@ -221,7 +294,7 @@
       document.getElementById("composer").requestSubmit();
     }
   });
-  paintChips();
+  syncSubject();
   loadList();
   bubble("assistant", "Approved desk. Choose the exam level and a mode. Practice mode will not reveal the answer until you ask.");
 </script>

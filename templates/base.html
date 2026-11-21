@@ -6,7 +6,18 @@
   <meta name="robots" content="noindex, nofollow">
   <title>{% block title %}Siddhant{% endblock %} · JEE desk</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,520;9..144,650&family=Noto+Sans+Devanagari:wght@400;600&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("siddhant-theme");
+        if (saved === "light" || saved === "dark") document.documentElement.setAttribute("data-theme", saved);
+      } catch (e) {}
+    })();
+  </script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -16,6 +27,7 @@
       <span>Siddhant</span>
     </a>
     <nav>
+      <button class="textbtn theme-toggle" id="theme" type="button">Theme</button>
       {% if user %}
         {% if admin %}<a href="/admin">Approvals</a>{% endif %}
         {% if user["status"] == "approved" or admin %}<a href="/desk">Desk</a>{% else %}<a href="/waiting">Request</a>{% endif %}
@@ -30,6 +42,25 @@
     {% block body %}{% endblock %}
   </main>
   <script>
+    const themeBtn = document.getElementById("theme");
+    function appliedTheme() {
+      const set = document.documentElement.getAttribute("data-theme");
+      if (set === "light" || set === "dark") return set;
+      return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+    function paintTheme() {
+      if (!themeBtn) return;
+      const next = appliedTheme() === "dark" ? "Light" : "Dark";
+      themeBtn.textContent = next;
+      themeBtn.setAttribute("aria-label", "Switch to " + next.toLowerCase() + " colors");
+    }
+    paintTheme();
+    if (themeBtn) themeBtn.addEventListener("click", () => {
+      const next = appliedTheme() === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      try { localStorage.setItem("siddhant-theme", next); } catch (e) {}
+      paintTheme();
+    });
     const out = document.getElementById("logout");
     if (out) out.addEventListener("click", async () => {
       await fetch("/api/logout", {method: "POST"});
