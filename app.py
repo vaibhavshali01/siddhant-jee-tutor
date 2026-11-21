@@ -20,6 +20,10 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
+from zoneinfo import ZoneInfo
+
+from dashboard_state import fresh_state, record_tutor_work, sanitize
+from model_client import request_body, timeout_seconds, tool_note
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -75,17 +79,29 @@ Teach like a sharp coaching faculty member: precise, calm, and honest about diff
 
 Rules:
 - Match the requested exam. JEE Main: single correct, numerical, speed, NCERT-faithful. JEE Advanced: multi-correct, paragraph, matrix match, integer, deeper traps, multi-concept.
-- Default to teaching, not dumping. For a solve request, give a clean worked solution: given, diagram in words if needed, concept, equations, substitution, answer with units, then one "why students miss this" note.
-- For practice mode, give ONLY the question (and options if Main-style). Do not reveal the answer until the student asks for a hint or the solution.
-- For hint mode, give one nudge, not the full solution.
-- Use LaTeX. Inline math with $...$ and display math with $$...$$. Do not use \\( \\) or bare unicode for equations.
+- Default to teaching, not dumping. For a solve request, use exactly these level-2 markdown headings, in this order. Skip a heading only when it truly does not apply. Keep these heading words in English even if the explanation is in Hindi:
+  ## Given
+  ## Concept
+  ## Equations
+  ## Substitution
+  ## Answer
+  ## Common trap
+  Describe a diagram in words inside Given or Concept when the question needs one.
+- For practice mode, give ONLY the question under ## Question, plus ## Options when it is multiple choice. Do not reveal the answer until the student asks for a hint or the solution.
+- For hint mode, write only ## Hint, with one nudge and not the full solution.
+- For concept mode, use ## Idea, ## Example, and ## Check.
+- For revision mode, use ## Formulae, ## When to use, and ## Traps.
+- Use LaTeX for every quantity, vector, fraction, and unit. Inline math with $...$ and display math with $$...$$. Do not use \\( \\) or \\[ \\], do not use bare unicode for equations, and do not put equations in code fences.
+- Chemical formulae, ions, and reactions must use mhchem inside math, for example $\\ce{Fe^2+}$ and $$\\ce{MnO4^- + 8H+ + 5Fe^2+ -> Mn^2+ + 5Fe^3+ + 4H2O}$$. Write units inside the math as \\mathrm{m\\,s^{-2}} or \\pu{m.s^{-2}}. Write vectors as \\vec{v} and fractions as \\frac{a}{b}.
+- Accuracy comes before speed. Check that every derived unit matches the dimensions of the quantity. Keep vector direction when the answer is a vector. For JEE Advanced, do not collapse a multi-correct question into one option. Recompute the substitution before writing the final number, and prefer an exact value over a guessed decimal. If a standard constant or result is uncertain, say so.
+- If a photo is attached, transcribe every visible number, symbol, and unit under ## Given before solving. If a mark is unreadable, name it. Do not guess a missing digit.
 - State assumptions. Use SI units unless the question uses another system. Keep significant figures sensible.
 - Never invent an official answer key, year, or "this was JEE Advanced 2019 Q4" unless you are sure. If unsure, say it is a similar practice item.
 - If a photo is attached, read it carefully, restate the question in text first, then solve. If the photo is unreadable, say exactly what is missing.
 - Do not do the student's graded homework in a way that hides the method. Always show the method.
 - If the question is outside JEE Physics, Chemistry, or Mathematics, briefly redirect and offer the closest exam-relevant angle.
 - Language: reply in the language the student used. Support English and Hindi. Keep chemical names and symbols standard.
-- End solve responses with the final answer on its own line, prefixed "Final answer:".
+- End solve responses with the final result on its own line, exactly **Final answer:** $...$ with the unit inside the math when there is one.
 - Be concise. No pep talk filler. No "Certainly". No mention of being an AI unless asked.
 """
 
@@ -145,8 +161,17 @@ def init_db() -> None:
                 count INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(user_id, day)
             );
+            CREATE TABLE IF NOT EXISTS dashboards (
+                user_id INTEGER PRIMARY KEY,
+                state TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)")}
+        if "response_id" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN response_id TEXT")
         existing = conn.execute("SELECT id FROM users WHERE email = ?", (ADMIN_EMAIL,)).fetchone()
         if not existing:
             conn.execute(
@@ -473,6 +498,7 @@ async def admin_update(user_id: int, request: Request):
             conn.execute("DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)", (user_id,))
             conn.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM usage WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM dashboards WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         elif action == "cap":
             try:
@@ -591,6 +617,102 @@ def bump_usage(user_id: int) -> None:
         )
 
 
+def _output_text(response: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for item in response.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        for part in item.get("content") or []:
+            if isinstance(part, dict) and part.get("type") in {"output_text", "text"}:
+                parts.append(str(part.get("text") or ""))
+    return "".join(parts)
+
+
+def _load_dashboard(user_id: int) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute("SELECT state FROM dashboards WHERE user_id = ?", (user_id,)).fetchone()
+        if not row:
+            state = fresh_state()
+            conn.execute(
+                "INSERT INTO dashboards (user_id, state, updated_at) VALUES (?, ?, ?)",
+                (user_id, json.dumps(state), now()),
+            )
+            return state
+    try:
+        saved = json.loads(row["state"])
+    except json.JSONDecodeError:
+        saved = {}
+    return sanitize(saved)
+
+
+def _save_dashboard(user_id: int, state: dict[str, Any]) -> None:
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO dashboards (user_id, state, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at""",
+            (user_id, json.dumps(state), now()),
+        )
+
+
+def _note_practice(user_id: int, subject: str, mode: str, text: str) -> None:
+    try:
+        state = record_tutor_work(_load_dashboard(user_id), subject, mode, text, datetime.now(ZoneInfo("Asia/Kolkata")))
+        _save_dashboard(user_id, state)
+    except Exception:
+        return
+
+
+def _desk_user(request: Request) -> sqlite3.Row | None:
+    user = current_user(request)
+    if not user or (user["status"] != "approved" and not is_admin(user)):
+        return None
+    return user
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_page(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if user["status"] != "approved" and not is_admin(user):
+        return RedirectResponse("/waiting", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "user": user,
+            "admin": is_admin(user),
+            "csrf": csrf_of(request),
+            "profile": {"name": user["name"], "email": user["email"], "class_year": user["class_year"], "target": user["target"]},
+        },
+    )
+
+
+@app.get("/api/dashboard")
+def dashboard_get(request: Request):
+    user = _desk_user(request)
+    if not user:
+        return JSONResponse({"error": "Not allowed."}, status_code=403)
+    return {"state": _load_dashboard(user["id"])}
+
+
+@app.put("/api/dashboard")
+async def dashboard_put(request: Request):
+    user = _desk_user(request)
+    if not user or not require_csrf(request):
+        return JSONResponse({"error": "Not allowed."}, status_code=403)
+    raw = await request.body()
+    if len(raw) > 1_500_000:
+        return JSONResponse({"error": "That dashboard is too large to save."}, status_code=400)
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "The dashboard update was not valid JSON."}, status_code=400)
+    state = sanitize(body.get("state") if isinstance(body, dict) else None)
+    _save_dashboard(user["id"], state)
+    return {"ok": True, "state": state}
+
+
 @app.post("/api/chat")
 async def chat(request: Request):
     user = current_user(request)
@@ -621,8 +743,8 @@ async def chat(request: Request):
     data_url = None
     if upload and getattr(upload, "filename", ""):
         blob = await upload.read()
-        if len(blob) > 4_500_000:
-            return JSONResponse({"error": "Photo must be under 4 MB."}, status_code=400)
+        if len(blob) > 8_000_000:
+            return JSONResponse({"error": "Photo must be under 8 MB."}, status_code=400)
         kind = (upload.content_type or "").lower()
         ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}.get(kind)
         if not ext:
@@ -664,15 +786,18 @@ async def chat(request: Request):
 
     history = list(reversed(history))
     mode_note = {
-        "solve": "Give a full worked solution and end with Final answer:.",
-        "hint": "Give only one hint. Do not finish the problem.",
-        "practice": "Give only a fresh exam-style question. No answer, no hint.",
-        "concept": "Explain the concept with one short example, then a check question.",
-        "revision": "Give the formula sheet for this topic, conditions of use, and two common traps.",
+        "solve": "Lay the solution out under ## Given, ## Concept, ## Equations, ## Substitution, ## Answer, and ## Common trap. Recompute the arithmetic before the final line. End with its own line **Final answer:** $...$ including units.",
+        "hint": "Write only a ## Hint section with one nudge. Do not finish the problem.",
+        "practice": "Write only ## Question and, if it is multiple choice, ## Options. No answer and no hint.",
+        "concept": "Use ## Idea, ## Example, and ## Check.",
+        "revision": "Use ## Formulae, ## When to use, and ## Traps.",
     }.get(mode, "Teach the doubt.")
     steer = (
         f"Student context: exam={exam}, subject={subject}, mode={mode}, language={language}. {mode_note}"
     )
+    extra = tool_note(mode)
+    if extra:
+        steer = f"{steer} {extra}"
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": steer},
@@ -693,36 +818,106 @@ async def chat(request: Request):
             messages.append({"role": row["role"], "content": row["content"]})
 
     bump_usage(user["id"])
+    previous_id = ""
+    if convo is not None and not data_url:
+        previous_id = str(convo["response_id"] or "")
+    payload = request_body(
+        model=MODEL,
+        messages=messages,
+        mode=mode,
+        exam=exam,
+        has_image=bool(data_url),
+        conversation_key=f"siddhant-{user['id']}-{cid}",
+        previous_response_id=previous_id or None,
+    )
 
     async def stream():
-        yield f"data: {json.dumps({'conversation_id': cid})}\n\n"
+        yield f"data: {json.dumps({'conversation_id': cid, 'effort': payload['reasoning']['effort']})}\n\n"
         collected: list[str] = []
-        try:
-            async with httpx.AsyncClient(timeout=180) as client:
-                async with client.stream(
-                    "POST",
-                    f"{BASE_URL}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"model": MODEL, "messages": messages, "stream": True, "temperature": 0.3},
-                ) as resp:
-                    if resp.status_code >= 400:
-                        detail = (await resp.aread()).decode()[:500]
-                        yield f"data: {json.dumps({'error': f'Grok API {resp.status_code}: {detail}'})}\n\n"
-                        return
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        payload = line[5:].strip()
-                        if payload == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(payload)
-                        except json.JSONDecodeError:
-                            continue
-                        delta = ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
+        response_id = ""
+
+        async def read_response(client: httpx.AsyncClient, body: dict[str, Any]):
+            nonlocal response_id
+            async with client.stream(
+                "POST",
+                f"{BASE_URL}/responses",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+            ) as resp:
+                if resp.status_code >= 400:
+                    detail = (await resp.aread()).decode()[:500]
+                    yield (resp.status_code, detail)
+                    return
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if not raw or raw == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    kind = str(event.get("type") or "")
+                    if kind == "response.output_text.delta":
+                        delta = str(event.get("delta") or "")
                         if delta:
                             collected.append(delta)
-                            yield f"data: {json.dumps({'token': delta})}\n\n"
+                            yield delta
+                    elif kind in {"response.completed", "response.incomplete"}:
+                        response = event.get("response") or {}
+                        response_id = str(response.get("id") or response_id)
+                        if not collected:
+                            recovered = _output_text(response)
+                            if recovered:
+                                collected.append(recovered)
+                                yield recovered
+                    elif kind == "response.error" or kind == "error":
+                        message = event.get("message") or event.get("error") or "The model returned an error."
+                        raise RuntimeError(str(message))
+            yield (200, "")
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds()) as client:
+                status, detail = None, ""
+                agen = read_response(client, payload)
+                try:
+                    while True:
+                        item = await agen.__anext__()
+                        if isinstance(item, tuple):
+                            status, detail = item
+                        else:
+                            yield f"data: {json.dumps({'token': item})}\n\n"
+                except StopAsyncIteration:
+                    pass
+                if status and status >= 400 and (payload.get("tools") or payload.get("previous_response_id")):
+                    collected.clear()
+                    response_id = ""
+                    retry = dict(payload)
+                    retry.pop("tools", None)
+                    retry.pop("previous_response_id", None)
+                    retry["input"] = request_body(
+                        model=MODEL,
+                        messages=messages,
+                        mode=mode,
+                        exam=exam,
+                        has_image=bool(data_url),
+                        conversation_key=payload["prompt_cache_key"],
+                        previous_response_id=None,
+                    )["input"]
+                    agen = read_response(client, retry)
+                    try:
+                        while True:
+                            item = await agen.__anext__()
+                            if isinstance(item, tuple):
+                                status, detail = item
+                            else:
+                                yield f"data: {json.dumps({'token': item})}\n\n"
+                    except StopAsyncIteration:
+                        pass
+                if status and status >= 400:
+                    yield f"data: {json.dumps({'error': f'Grok API {status}: {detail}'})}\n\n"
+                    return
         except Exception as exc:
             yield f"data: {json.dumps({'error': f'Could not reach Grok: {exc}'})}\n\n"
             return
@@ -732,7 +927,12 @@ async def chat(request: Request):
                 "INSERT INTO messages (conversation_id, role, content, image_path, created_at) VALUES (?, 'assistant', ?, NULL, ?)",
                 (cid, answer, now()),
             )
-            conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now(), cid))
+            conn.execute(
+                "UPDATE conversations SET updated_at = ?, response_id = ? WHERE id = ?",
+                (now(), response_id or None, cid),
+            )
+        if mode in {"solve", "practice"}:
+            _note_practice(user["id"], subject, mode, text or "")
         yield f"data: {json.dumps({'done': True})}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")

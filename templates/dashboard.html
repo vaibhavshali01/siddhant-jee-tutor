@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Today{% endblock %}
+{% block body %}
+<section class="board" id="board" data-accent="amber">
+  <div class="board-tabs" id="tabs" role="tablist"></div>
+  <div id="panel"></div>
+</section>
+<div id="focus" class="focus-layer" hidden></div>
+<p id="toast" class="toast" role="status" hidden></p>
+{% endblock %}
+{% block script %}
+<script>
+  const CSRF = {{ csrf | tojson }};
+  const PROFILE = {{ profile | tojson }};
+</script>
+<script src="/static/dashboard.js"></script>
+{% endblock %}

@@ -2,13 +2,14 @@
 
 A small web app you can put on the public internet. Anyone can open the site. Nobody can use the desk until you approve their account.
 
-The tutor is Grok (`grok-4.7` by default) through the xAI API. The API key stays on the server.
+The tutor is Grok (`grok-4.7` by default) through the xAI Responses API. The API key stays on the server. Worked solutions can use the code-execution tool to check the arithmetic. Advanced questions and photos use `xhigh` reasoning; hints and drills stay lighter.
 
 ## What a student can do
 
 - Request access with name, email, class, target exam, and a note
 - After you approve them: worked solutions, one hint, practice questions that do not spoil the answer, concept notes, formula revision
-- Attach a photo of a printed or handwritten question
+- A study dashboard on **Today**: exam countdown, focus timer, tasks, syllabus, mistake notebook, lecture log, and backlogs. It is stored for that account
+- Attach a photo of a printed or handwritten question. Photos are sent to the model at high detail
 - English or Hindi
 - Physics, Chemistry, Mathematics, at JEE Main or JEE Advanced level
 
@@ -35,6 +36,12 @@ cp .env.example .env
 Edit `.env`:
 
 - `XAI_API_KEY` from https://console.x.ai
+- `XAI_MODEL` — leave this as `grok-4.7` unless xAI renames the flagship
+- `XAI_REASONING_EFFORT` — `high` by default. Do not invent another model name to get a smarter answer
+- `XAI_CODE_EXECUTION` — `auto` checks the numbers on worked solutions
+- `XAI_WEB_SEARCH` — leave `false` unless you want live lookup
+- `XAI_IMAGE_DETAIL` — `high` for question photos
+- `XAI_TIMEOUT_SECONDS` — `900`, because a hard solution can think for a few minutes
 - `SECRET_KEY` — a long random string
 - `ADMIN_EMAIL` and `ADMIN_PASSWORD` — this account is created on first boot and is already approved
 
